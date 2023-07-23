@@ -1,0 +1,109 @@
+%%cu
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+
+#define VECT_SIZE 10000
+#define BLOCK_SIZE 500
+
+__global__ void find_longest_match(int *vect, int *match_sizes, int *match_indices, int num_blocks) {
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+    for (int j = tid + 1; j < VECT_SIZE; j++) {
+        int match_size = 0;
+        while (j + match_size < VECT_SIZE && vect[tid + match_size] == vect[j + match_size]) {
+            match_size++;
+        }
+        if (match_size > match_sizes[blockIdx.x]) {
+            match_sizes[blockIdx.x] = match_size;
+            match_indices[blockIdx.x] = tid;
+        }
+    }
+}
+
+int main() {
+    int vect[VECT_SIZE];
+    int longest_match_size = 0;
+    int longest_match_index = 0;
+
+    // Initialisation de la génération aléatoire
+    //srand(time(NULL));
+
+    // Initialiser le vecteur avec des valeurs aléatoires
+    for (int i = 0; i < VECT_SIZE; i++) {
+        vect[i] = rand() % 10; // Nombre aléatoire entre 0 et 9 inclus
+        printf("%d ", vect[i]); // Affichage du vecteur
+    }
+    printf("\n");
+
+    // Allouer de la mémoire pour les données sur le GPU
+    int *d_vect, *d_match_sizes, *d_match_indices;
+    cudaMalloc((void**)&d_vect, VECT_SIZE * sizeof(int));
+    cudaMalloc((void**)&d_match_sizes, BLOCK_SIZE * sizeof(int));
+    cudaMalloc((void**)&d_match_indices, BLOCK_SIZE * sizeof(int));
+
+    // Copier les données du vecteur sur le GPU
+    cudaMemcpy(d_vect, vect, VECT_SIZE * sizeof(int), cudaMemcpyHostToDevice);
+
+    // Initialiser les tableaux de résultats sur le CPU
+    int *match_sizes = (int*)malloc(BLOCK_SIZE * sizeof(int));
+    int *match_indices = (int*)malloc(BLOCK_SIZE * sizeof(int));
+    for (int i = 0; i < BLOCK_SIZE; i++) {
+        match_sizes[i] = 0;
+        match_indices[i] = 0;
+    }
+
+
+    // Calcul du nombre de blocks pour que: (num_blocks*BLOCK_SIZE) == VECT_SIZE
+    int num_blocks = (VECT_SIZE + BLOCK_SIZE - 1) / BLOCK_SIZE;
+
+    // Lancement du timer
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    cudaEventRecord(start);
+
+    // Lancement du kernel
+    find_longest_match<<<num_blocks, BLOCK_SIZE>>>(d_vect, d_match_sizes, d_match_indices, num_blocks);
+    
+    // Arrêt du timer
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    float milliseconds = 0;
+    cudaEventElapsedTime(&milliseconds, start, stop);
+
+
+    // Copier les résultats du GPU sur le CPU
+    cudaMemcpy(match_sizes, d_match_sizes, BLOCK_SIZE * sizeof(int), cudaMemcpyDeviceToHost);
+    cudaMemcpy(match_indices, d_match_indices, BLOCK_SIZE * sizeof(int), cudaMemcpyDeviceToHost);
+
+    // Trouver la plus grande occurrence parmi les résultats des blocks
+    for (int i = 0; i < num_blocks; i++) {
+        //printf("i %d match_sizes[i]%d\n",i,match_sizes[i]);
+        if (match_sizes[i] > longest_match_size) {
+            longest_match_size = match_sizes[i];
+            longest_match_index = match_indices[i];
+        }
+    }
+
+    // Afficher le résultat
+    printf("Le plus long motif en double a une taille de %d et commence à l'index %d du vecteur.\n", longest_match_size, longest_match_index);
+
+    // Afficher le motif trouvé
+    printf("Le motif est : ");
+    for (int i = 0; i < longest_match_size; i++) {
+        printf("%d ", vect[longest_match_index + i]);
+    }
+    printf("\n");
+
+    // Afficher le temps d'exécution
+    printf("Le temps d'exécution est de %f secondes.\n", milliseconds / 1000);
+
+    // Libérer la mémoire allouée sur le GPU et le CPU
+    cudaFree(d_vect);
+    cudaFree(d_match_sizes);
+    cudaFree(d_match_indices);
+    free(match_sizes);
+    free(match_indices);
+
+    return 0;
+}
